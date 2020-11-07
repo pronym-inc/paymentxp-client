@@ -1,64 +1,43 @@
+from dataclasses import dataclass
 from datetime import date
 from typing import Dict, List, Optional
+from uuid import uuid4
 
 import requests
 from requests import Response
 
 
+class PaymentXpException(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class AuthorizationResponse:
+    is_successful: bool
+    transaction_id: str
+    reference_number: str
+
+
+@dataclass(frozen=True)
+class CaptureResponse:
+    is_successful: bool
+
+
+@dataclass(frozen=True)
 class BillingAddress:
     address: str
     city: str
     state: str
     zipcode: str
 
-    def __init__(
-            self,
-            address: str,
-            city: str,
-            state: str,
-            zipcode: str):
-        self.address = address
-        self.city = city
-        self.state = state
-        self.zipcode = zipcode
 
-    def __eq__(self, other) -> bool:
-        return (
-            self.address == other.address and
-            self.city == other.city and
-            self.state == other.state and
-            self.zipcode == other.zipcode
-        )
-
-
+@dataclass(frozen=True)
 class CardInfo:
     name: str
     number: str
     expiration: str
     cvv2: str
     address: BillingAddress
-
-    def __init__(
-            self,
-            name: str,
-            number: str,
-            expiration: str,
-            cvv2: str,
-            address: BillingAddress):
-        self.name = name
-        self.number = number
-        self.expiration = expiration
-        self.cvv2 = cvv2
-        self.address = address
-
-    def __eq__(self, other) -> bool:
-        return (
-            self.name == other.name and
-            self.number == other.number and
-            self.expiration == other.expiration and
-            self.cvv2 == other.cvv2 and
-            self.address == other.address
-        )
 
 
 class PaymentXpClient:
@@ -71,6 +50,55 @@ class PaymentXpClient:
     def __init__(self, merchant_id: str, merchant_key: str):
         self.merchant_id = merchant_id
         self.merchant_key = merchant_key
+
+    def authorize_payment(self, card_info: CardInfo, amount: float) -> AuthorizationResponse:
+        reference_number = str(uuid4())
+        try:
+            response = self._make_request(
+                'webhost.aspx',
+                {
+                    'CardNumber': card_info.number,
+                    'ExpirationDateMMYY': card_info.expiration,
+                    'BillingFullName': card_info.name,
+                    'BillingAddress': card_info.address.address,
+                    'BillingZipCode': card_info.address.zipcode,
+                    'BillingCity': card_info.address.city,
+                    'BillingState': card_info.address.state,
+                    'MerchantID': self.merchant_id,
+                    'MerchantKey': self.merchant_key,
+                    'ReferenceNumber': reference_number,
+                    'TransactionAmount': amount,
+                    'TransactionType': 'CreditCardAuthorization'
+                }
+            )
+        except PaymentXpException:
+            return AuthorizationResponse(
+                is_successful=False,
+                transaction_id='',
+                reference_number=reference_number
+            )
+        return AuthorizationResponse(
+            is_successful=response['StatusID'] == '0',
+            transaction_id=response['TransactionID'],
+            reference_number=reference_number
+        )
+
+    def capture_payment(self, transaction_id: str, reference_number: str, amount: float) -> CaptureResponse:
+        try:
+            response = self._make_request(
+                'webhost.aspx',
+                {
+                    'MerchantID': self.merchant_id,
+                    'MerchantKey': self.merchant_key,
+                    'ReferenceNumber': reference_number,
+                    'TransactionAmount': amount,
+                    'TransactionID': transaction_id,
+                    'TransactionType': 'CreditCardSettle'
+                }
+            )
+        except PaymentXpException:
+            return CaptureResponse(is_successful=False)
+        return CaptureResponse(is_successful=response['StatusID'] == '0')
 
     def charge_card(self, card_info: CardInfo, amount: float) -> Dict[str, str]:
         return self._make_request(
@@ -205,7 +233,7 @@ class PaymentXpClient:
         headers = {'Content-Type': 'application/x-www-form-urlencoded'}
         response = requests.post(request_url, data, headers=headers)
         if response.status_code != 200:
-            raise Exception("Request failed: {0} {1}".format(
+            raise PaymentXpException("Request failed: {0} {1}".format(
                 response.status_code, response.content))
         return self._parse_response(response)
 
