@@ -1,6 +1,6 @@
 from setuptools import find_packages, setup
 
-install_dependencies = []
+install_dependencies = ['requests==2.24.0']
 test_dependencies = []
 
 
